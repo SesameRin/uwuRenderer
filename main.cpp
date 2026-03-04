@@ -9,64 +9,47 @@ constexpr double PI = 3.14159265358979323846;
 constexpr int width = 800;
 constexpr int height = 800;
 
-// 我们自定义的 Shader 逻辑
-struct RandomShader : public IShader
-{
-    Model &model;
-    TGAColor color; // 暂存当前三角形的随机颜色
-
-    RandomShader(Model &m) : model(m) {}
-
-    virtual vec4 vertex(int iface, int nthvert) override
-    {
-        vec3 v = model.vert(iface, nthvert);
-        vec4 gl_Vertex = vec4{v.x, v.y, v.z, 1.0};
-        // MVP 变换：P * V * M * vertex
-        return ProjMatrix * ViewMatrix * ModelMatrix * gl_Vertex;
-    }
-
-    virtual std::pair<bool, TGAColor> fragment(vec3 bar) override
-    {
-        // 直接返回设定的随机颜色，不执行 discard
-        return {false, color};
-    }
-};
-
-// 简单的 Flat Shading + Phong 光照模型
+// 平滑着色的 Phong 光照模型
 struct PhongShader : public IShader
 {
     Model &model;
-    vec3 l;      // View Space 下的光照方向
-    vec3 tri[3]; // View Space 下的三角形顶点坐标
-    double e = 35.0; // Specular Exponent 高光指数
+    vec3 l;              // View Space 下的光照方向
+    vec3 tri[3];         // View Space 下的三角形顶点坐标
+    vec3 varying_nrm[3]; // 传递给片元着色器的顶点法线 (View Space)
+
+    mat<4, 4> uniform_M_inv_T; // 预计算法线的变换矩阵：(View * Model) 的逆转置
+    double e = 35.0;
 
     PhongShader(vec3 light_dir, Model &m) : model(m)
     {
-        // 将世界空间的光照方向，变换到 View Space。
-        // 注意 w=0.0，表示这是一个方向向量，不受 ViewMatrix 中的平移影响，只受旋转影响。
         vec4 l_view = ViewMatrix * vec4{light_dir.x, light_dir.y, light_dir.z, 0.0};
         l = normalized(vec3{l_view.x, l_view.y, l_view.z});
+        uniform_M_inv_T = (ViewMatrix * ModelMatrix).invert_transpose();
     }
 
     virtual vec4 vertex(int iface, int nthvert) override
     {
+        // 1. 处理顶点坐标
         vec3 v = model.vert(iface, nthvert);
         vec4 gl_Vertex = vec4{v.x, v.y, v.z, 1.0};
-
-        // 先把顶点从 Model Space 变换到 View Space (Eye Coordinates)
         vec4 v_view = ViewMatrix * ModelMatrix * gl_Vertex;
-
-        // 保存 View Space 下的坐标，留给 Fragment Shader 算三角形法线
         tri[nthvert] = vec3{v_view.x, v_view.y, v_view.z};
 
-        // 继续乘以投影矩阵，变换到 Clip Space 并返回给光栅化器
+        // 2. 处理顶点法线
+        vec3 n = model.normal(iface, nthvert);
+        vec4 n_view = uniform_M_inv_T * vec4{n.x, n.y, n.z, 0.0};
+        varying_nrm[nthvert] = normalized(vec3{n_view.x, n_view.y, n_view.z});
+
+        // 3. 投影到裁剪空间
         return ProjMatrix * v_view;
     }
 
     virtual std::pair<bool, TGAColor> fragment(vec3 bar) override
     {
         TGAColor base_color = {255, 255, 255, 255};
-        vec3 n = normalized(cross(tri[1] - tri[0], tri[2] - tri[0]));
+
+        // 利用重心坐标进行法线插值
+        vec3 n = normalized(varying_nrm[0] * bar.x +varying_nrm[1] * bar.y +varying_nrm[2] * bar.z);
         // R = 2 * (N·L) * N - L
         vec3 r = normalized(n * (n * l) * 2.0 - l);
 
@@ -76,7 +59,7 @@ struct PhongShader : public IShader
 
         // 指向相机的视线向量 V : (0, 0, 1)。
         // 高光dot(V, R)，即 (0, 0, 1) · (r.x, r.y, r.z) = r.z
-        double spec = std::pow(std::max(r.z, 0.0), e); 
+        double spec = std::pow(std::max(r.z, 0.0), e);
 
         for (int i = 0; i < 3; i++)
         {
@@ -100,7 +83,7 @@ int main(int argc, char **argv)
     TGAImage framebuffer(width, height, TGAImage::RGB);
 
     // 1. 设置管线全局状态 (替代你原来在 main 里的局部变量)
-    vec3 eye{0, 0, 3};
+    vec3 eye{0, 0, 1.8};
     vec3 center{0, 0, 0};
     vec3 up{0, 1, 0};
 
