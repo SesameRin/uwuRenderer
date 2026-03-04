@@ -165,11 +165,17 @@ bool TGAImage::unload_rle_data(std::ofstream &out) const {
     return true;
 }
 
-TGAColor TGAImage::get(const int x, const int y) const {
-    if (!data.size() || x<0 || y<0 || x>=w || y>=h) return {};
-    TGAColor ret = {0, 0, 0, 0, bpp};
-    const std::uint8_t *p = data.data()+(x+y*w)*bpp;
-    for (int i=bpp; i--; ret.bgra[i] = p[i]);
+TGAColor TGAImage::get(const int x, const int y) const
+{
+    if (!data.size() || x < 0 || y < 0 || x >= w || y >= h)
+        return {};
+
+    TGAColor ret;
+    ret.bytespp = bpp;
+
+    const std::uint8_t *p = data.data() + (x + y * w) * bpp;
+    for (int i = bpp; i--; ret.bgra[i] = p[i])
+        ;
     return ret;
 }
 
