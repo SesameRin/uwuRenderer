@@ -183,11 +183,7 @@ struct PhongShader : public IShader
                 {
                     visibility /= sample_count; // 算出 [0.0, 1.0] 的可见比例
                 }
-
-                // 最终混合阴影系数：
-                // 如果 visibility 是 0（全被挡住），亮度就是 0.3（最暗的本影）
-                // 如果 visibility 是 1（全没挡住），亮度就是 1.0（全亮）
-                shadow_coeff = 0.3 + 0.7 * visibility;
+                shadow_coeff = visibility;
             }
         }
 
@@ -209,6 +205,7 @@ struct PhongShader : public IShader
         {
             base_color[i] = std::min<int>(255, base_color[i] * (ambient + (diff + spec) * shadow_coeff));
         }
+        // std::cout << shadow_coeff << std::endl;
 
         return {false, base_color};
     }
