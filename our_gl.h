@@ -24,12 +24,14 @@ struct IShader
 {
     virtual ~IShader() = default;
 
-    // 顶点着色器：输入面索引和顶点索引，返回裁剪空间坐标 (Clip Coordinates)
+    // 通用 2D 贴图采样器
+    static TGAColor sample2D(const TGAImage &img, const vec2 &uvf)
+    {
+        return img.get(uvf.x * img.width(), uvf.y * img.height());
+    }
+
     virtual vec4 vertex(int iface, int nthvert) = 0;
-    
-    // 片元着色器：输入重心坐标，返回 {是否丢弃该片元, 片元颜色}
     virtual std::pair<bool, TGAColor> fragment(vec3 bar) = 0;
 };
 
-// 光栅化器核心 (接收组装好的三角形裁剪坐标)
 void rasterize(vec4 clip_coords[3], IShader &shader, TGAImage &framebuffer);

@@ -9,16 +9,16 @@ constexpr double PI = 3.14159265358979323846;
 constexpr int width = 800;
 constexpr int height = 800;
 
-// 平滑着色的 Phong 光照模型
+// 支持 UV 插值和法线贴图的光照模型
 struct PhongShader : public IShader
 {
     Model &model;
-    vec3 l;              // View Space 下的光照方向
-    vec3 tri[3];         // View Space 下的三角形顶点坐标
-    vec3 varying_nrm[3]; // 传递给片元着色器的顶点法线 (View Space)
-
-    mat<4, 4> uniform_M_inv_T; // 预计算法线的变换矩阵：(View * Model) 的逆转置
+    vec3 l;
+    mat<4, 4> uniform_M_inv_T;
     double e = 35.0;
+
+    // --- 新增：专门用来存放并传递 UV 坐标的数组 ---
+    vec2 varying_uv[3];
 
     PhongShader(vec3 light_dir, Model &m) : model(m)
     {
@@ -29,42 +29,41 @@ struct PhongShader : public IShader
 
     virtual vec4 vertex(int iface, int nthvert) override
     {
-        // 1. 处理顶点坐标
+        // 1. 读取并保存当前顶点的 UV 坐标，供后续片元着色器插值使用
+        varying_uv[nthvert] = model.uv(iface, nthvert);
+
+        // 2. 处理顶点坐标 (保持不变)
         vec3 v = model.vert(iface, nthvert);
         vec4 gl_Vertex = vec4{v.x, v.y, v.z, 1.0};
         vec4 v_view = ViewMatrix * ModelMatrix * gl_Vertex;
-        tri[nthvert] = vec3{v_view.x, v_view.y, v_view.z};
 
-        // 2. 处理顶点法线
-        vec3 n = model.normal(iface, nthvert);
-        vec4 n_view = uniform_M_inv_T * vec4{n.x, n.y, n.z, 0.0};
-        varying_nrm[nthvert] = normalized(vec3{n_view.x, n_view.y, n_view.z});
-
-        // 3. 投影到裁剪空间
         return ProjMatrix * v_view;
     }
 
     virtual std::pair<bool, TGAColor> fragment(vec3 bar) override
     {
-        TGAColor base_color = {255, 255, 255, 255};
-
-        // 利用重心坐标进行法线插值
-        vec3 n = normalized(varying_nrm[0] * bar.x +varying_nrm[1] * bar.y +varying_nrm[2] * bar.z);
-        // R = 2 * (N·L) * N - L
+        // 1. 算 UV 和法线
+        vec2 uv = varying_uv[0] * bar.x + varying_uv[1] * bar.y + varying_uv[2] * bar.z;
+        vec3 n_tex = model.normal(uv);
+        vec4 n_view = uniform_M_inv_T * vec4{n_tex.x, n_tex.y, n_tex.z, 0.0};
+        vec3 n = normalized(vec3{n_view.x, n_view.y, n_view.z});
         vec3 r = normalized(n * (n * l) * 2.0 - l);
 
-        // --- Phong Reflection Model ---
-        double ambient = 0.3;               // 环境光系数
-        double diff = std::max(0.0, n * l); // 漫反射：法线和光照方向的夹角余弦
+        // 2. 光照参数设置
+        double ambient = 0.4;
+        double diff = std::max(0.0, n * l);
 
-        // 指向相机的视线向量 V : (0, 0, 1)。
-        // 高光dot(V, R)，即 (0, 0, 1) · (r.x, r.y, r.z) = r.z
-        double spec = std::pow(std::max(r.z, 0.0), e);
+        // 3. 从贴图读取高光权重 (灰度图，读 [0] 通道即可)
+        double spec_weight = IShader::sample2D(model.specular(), uv)[0] / 255.0;
+        double spec = (3.0 * spec_weight) * std::pow(std::max(r.z, 0.0), e);
 
+        // 4. 从贴图读取基础颜色
+        TGAColor base_color = IShader::sample2D(model.diffuse(), uv);
+
+        // 5. 颜色混合输出
         for (int i = 0; i < 3; i++)
         {
-            // 系数可调整
-            base_color[i] = std::min<int>(255, base_color[i] * (ambient + 0.4 * diff + 0.9 * spec));
+            base_color[i] = std::min<int>(255, base_color[i] * (ambient + diff + spec));
         }
 
         return {false, base_color};

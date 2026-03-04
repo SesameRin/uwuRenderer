@@ -1,18 +1,32 @@
+#pragma once
 #include <vector>
+#include <string>
 #include "geometry.h"
+#include "tgaimage.h"
 
 class Model
 {
-    std::vector<vec3> verts = {};    // array of vertices
-    std::vector<vec3> norms = {};    // array of normal vectors
-    std::vector<int> facet_vrt = {}; // per-triangle index in the above arrays
+    std::vector<vec3> verts = {};
+    std::vector<vec3> norms = {};
+    std::vector<vec2> tex = {};
+    std::vector<int> facet_vrt = {};
     std::vector<int> facet_nrm = {};
+    std::vector<int> facet_tex = {};
+    TGAImage diffusemap = {};  // diffuse color texture
+    TGAImage normalmap = {};   // normal map texture
+    TGAImage specularmap = {}; // specular texture
 
 public:
     Model(const std::string filename);
-    int nverts() const;                                    // number of vertices
-    int nfaces() const;                                    // number of triangles
-    vec3 vert(const int i) const;                          // 0 <= i < nverts()
-    vec3 vert(const int iface, const int nthvert) const;   // 0 <= iface <= nfaces(), 0 <= nthvert < 3
-    vec3 normal(const int iface, const int nthvert) const; // normal coming from the "vn x y z" entries in the .obj file
+    int nverts() const;
+    int nfaces() const;
+    vec3 vert(const int i) const;
+    vec3 vert(const int iface, const int nthvert) const;
+    vec3 normal(const int iface, const int nthvert) const;
+
+    vec3 normal(const vec2 &uv) const;
+    vec2 uv(const int iface, const int nthvert) const;
+
+    const TGAImage &diffuse() const;
+    const TGAImage &specular() const;
 };
