@@ -32,6 +32,62 @@ struct RandomShader : public IShader
     }
 };
 
+// 简单的 Flat Shading + Phong 光照模型
+struct PhongShader : public IShader
+{
+    Model &model;
+    vec3 l;      // View Space 下的光照方向
+    vec3 tri[3]; // View Space 下的三角形顶点坐标
+    double e = 35.0; // Specular Exponent 高光指数
+
+    PhongShader(vec3 light_dir, Model &m) : model(m)
+    {
+        // 将世界空间的光照方向，变换到 View Space。
+        // 注意 w=0.0，表示这是一个方向向量，不受 ViewMatrix 中的平移影响，只受旋转影响。
+        vec4 l_view = ViewMatrix * vec4{light_dir.x, light_dir.y, light_dir.z, 0.0};
+        l = normalized(vec3{l_view.x, l_view.y, l_view.z});
+    }
+
+    virtual vec4 vertex(int iface, int nthvert) override
+    {
+        vec3 v = model.vert(iface, nthvert);
+        vec4 gl_Vertex = vec4{v.x, v.y, v.z, 1.0};
+
+        // 先把顶点从 Model Space 变换到 View Space (Eye Coordinates)
+        vec4 v_view = ViewMatrix * ModelMatrix * gl_Vertex;
+
+        // 保存 View Space 下的坐标，留给 Fragment Shader 算三角形法线
+        tri[nthvert] = vec3{v_view.x, v_view.y, v_view.z};
+
+        // 继续乘以投影矩阵，变换到 Clip Space 并返回给光栅化器
+        return ProjMatrix * v_view;
+    }
+
+    virtual std::pair<bool, TGAColor> fragment(vec3 bar) override
+    {
+        TGAColor base_color = {255, 255, 255, 255};
+        vec3 n = normalized(cross(tri[1] - tri[0], tri[2] - tri[0]));
+        // R = 2 * (N·L) * N - L
+        vec3 r = normalized(n * (n * l) * 2.0 - l);
+
+        // --- Phong Reflection Model ---
+        double ambient = 0.3;               // 环境光系数
+        double diff = std::max(0.0, n * l); // 漫反射：法线和光照方向的夹角余弦
+
+        // 指向相机的视线向量 V : (0, 0, 1)。
+        // 高光dot(V, R)，即 (0, 0, 1) · (r.x, r.y, r.z) = r.z
+        double spec = std::pow(std::max(r.z, 0.0), e); 
+
+        for (int i = 0; i < 3; i++)
+        {
+            // 系数可调整
+            base_color[i] = std::min<int>(255, base_color[i] * (ambient + 0.4 * diff + 0.9 * spec));
+        }
+
+        return {false, base_color};
+    }
+};
+
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -55,17 +111,12 @@ int main(int argc, char **argv)
     init_zbuffer(width, height);
 
     // 2. 实例化着色器
-    RandomShader shader(model);
+    vec3 light_dir{1.0, 1.0, 1.0};
+    PhongShader shader(light_dir, model);
 
     // 3. 渲染主循环 (Primitive Assembly)
     for (int i = 0; i < model.nfaces(); i++)
     {
-        // 为当前三角形生成一个随机颜色，传给 Shader 的内部变量
-        TGAColor rnd;
-        for (int c = 0; c < 3; c++)
-            rnd[c] = std::rand() % 255;
-        shader.color = rnd;
-
         vec4 clip_coords[3];
         for (int j = 0; j < 3; j++)
         {
