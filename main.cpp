@@ -17,8 +17,10 @@ struct PhongShader : public IShader
     mat<4, 4> uniform_M_inv_T;
     double e = 35.0;
 
-    // --- 新增：专门用来存放并传递 UV 坐标的数组 ---
-    vec2 varying_uv[3];
+    // --- Shader 内部的数据通道 ---
+    vec2 varying_uv[3];  // 传递 UV
+    vec3 tri[3];         // 传递 View Space 下的顶点 3D 坐标 (用于算 E 矩阵)
+    vec3 varying_nrm[3]; // 传递 View Space 下的顶点法线 (用于插值算 N)
 
     PhongShader(vec3 light_dir, Model &m) : model(m)
     {
@@ -29,38 +31,64 @@ struct PhongShader : public IShader
 
     virtual vec4 vertex(int iface, int nthvert) override
     {
-        // 1. 读取并保存当前顶点的 UV 坐标，供后续片元着色器插值使用
         varying_uv[nthvert] = model.uv(iface, nthvert);
 
-        // 2. 处理顶点坐标 (保持不变)
         vec3 v = model.vert(iface, nthvert);
         vec4 gl_Vertex = vec4{v.x, v.y, v.z, 1.0};
+
+        // 算出 View Space 下的坐标并保存
         vec4 v_view = ViewMatrix * ModelMatrix * gl_Vertex;
+        tri[nthvert] = vec3{v_view.x, v_view.y, v_view.z};
+
+        // 算出 View Space 下的顶点法线并保存
+        vec3 n = model.normal(iface, nthvert);
+        vec4 n_view = uniform_M_inv_T * vec4{n.x, n.y, n.z, 0.0};
+        varying_nrm[nthvert] = normalized(vec3{n_view.x, n_view.y, n_view.z});
 
         return ProjMatrix * v_view;
     }
 
     virtual std::pair<bool, TGAColor> fragment(vec3 bar) override
     {
-        // 1. 算 UV 和法线
         vec2 uv = varying_uv[0] * bar.x + varying_uv[1] * bar.y + varying_uv[2] * bar.z;
+
+        // 利用重心坐标，算出当前像素平滑的 View Space 法线 (Normal)
+        vec3 bn = normalized(varying_nrm[0] * bar.x + varying_nrm[1] * bar.y + varying_nrm[2] * bar.z);
+
+        // 构建 3D 边矩阵 E (2行3列) 和 UV 边矩阵 U (2行2列)
+        mat<2, 3> E;
+        E[0] = tri[1] - tri[0];
+        E[1] = tri[2] - tri[0];
+        mat<2, 2> U;
+        U[0] = varying_uv[1] - varying_uv[0];
+        U[1] = varying_uv[2] - varying_uv[0];
+
+        mat<2, 3> T = U.invert() * E;
+
+        // 构建 TBN 矩阵 (Darboux frame)。将 T, B, N 作为行向量塞进去
+        mat<3, 3> D;
+        D[0] = normalized(T[0]); // 切线 Tangent
+        D[1] = normalized(T[1]); // 副切线 Bitangent
+        D[2] = bn;               // 法线 Normal
+
+        // 获取切线空间里的扰动法线 (即蓝色贴图里的相对倾斜角)
         vec3 n_tex = model.normal(uv);
-        vec4 n_view = uniform_M_inv_T * vec4{n_tex.x, n_tex.y, n_tex.z, 0.0};
-        vec3 n = normalized(vec3{n_view.x, n_view.y, n_view.z});
+
+        // 将切线空间法线转换为 View Space 法线
+        vec3 n = normalized(D.transpose() * n_tex);
         vec3 r = normalized(n * (n * l) * 2.0 - l);
 
-        // 2. 光照参数设置
+        // 光照参数设置
         double ambient = 0.4;
         double diff = std::max(0.0, n * l);
 
-        // 3. 从贴图读取高光权重 (灰度图，读 [0] 通道即可)
+        // 从贴图读取高光权重 (灰度图，读 [0] 通道即可)
         double spec_weight = IShader::sample2D(model.specular(), uv)[0] / 255.0;
         double spec = (3.0 * spec_weight) * std::pow(std::max(r.z, 0.0), e);
 
-        // 4. 从贴图读取基础颜色
+        // 从贴图读取基础颜色
         TGAColor base_color = IShader::sample2D(model.diffuse(), uv);
 
-        // 5. 颜色混合输出
         for (int i = 0; i < 3; i++)
         {
             base_color[i] = std::min<int>(255, base_color[i] * (ambient + diff + spec));
