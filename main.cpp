@@ -87,7 +87,7 @@ struct PhongShader : public IShader
         // 将切线空间法线转换为 View Space 法线
         vec3 n = normalized(D.transpose() * n_tex);
 
-        /// Shadow Test
+        /// PCSS 
         // 重建当前像素的世界坐标
         vec3 world_pos = varying_world_pos[0] * bar.x + varying_world_pos[1] * bar.y + varying_world_pos[2] * bar.z;
         // 把世界坐标变换到光源的屏幕空间
@@ -96,17 +96,98 @@ struct PhongShader : public IShader
         vec3 p = vec3{frag_light_space.x / frag_light_space.w, frag_light_space.y / frag_light_space.w, frag_light_space.z / frag_light_space.w};
 
         double shadow_coeff = 1.0;
-        int idx = int(p.x) + int(p.y) * shadow_w;
-        // 检查坐标是否在 Shadow Map 的范围内
-        if (p.x >= 0 && p.x < shadow_w && p.y >= 0 && p.y < shadow_h)
+        int px = int(p.x);
+        int py = int(p.y);
+
+        if (frag_light_space.w > 0.0 && px >= 0 && px < shadow_w && py >= 0 && py < shadow_h)
         {
+            // 抵消 VpMatrix 的偏移，获取 [-1.0, 1.0] 的真实 NDC 深度
             double current_depth = p.z - 1.0;
-            // std::cout << "cur depth: " << current_depth << std::endl;
-            // std::cout << "shadow map : " << shadow_map[idx] << std::endl;
-            // 加一个极小的 bias, 防止产生 Z-fighting 自遮挡问题
-            if (current_depth > shadow_map[idx] + sm_bias)
+
+            // ==========================================
+            // Step 1: Blocker Search (寻找遮挡物)
+            // ==========================================
+            int blocker_search_radius = 2; // 搜索半径 2，即 5x5 的范围
+            int blocker_count = 0;
+            double blocker_depth_sum = 0.0;
+
+            for (int i = -blocker_search_radius; i <= blocker_search_radius; i++)
             {
-                shadow_coeff = 0.3; // 处于阴影中，亮度降为 30%
+                for (int j = -blocker_search_radius; j <= blocker_search_radius; j++)
+                {
+                    int nx = px + i;
+                    int ny = py + j;
+                    if (nx < 0 || nx >= shadow_w || ny < 0 || ny >= shadow_h)
+                        continue;
+
+                    double sample_depth = shadow_map[nx + ny * shadow_w];
+                    // 如果采样点的深度比当前点小，说明它是遮挡物
+                    if (current_depth > sample_depth + sm_bias)
+                    {
+                        blocker_count++;
+                        blocker_depth_sum += sample_depth;
+                    }
+                }
+            }
+
+            // 如果 blocker_count == 0，说明完全没被挡住，保留 shadow_coeff = 1.0 即可
+            // 只有当存在遮挡物时，我们才需要计算半影和做 PCF
+            if (blocker_count > 0)
+            {
+                double avg_blocker_depth = blocker_depth_sum / blocker_count; // d_Blocker
+
+                // ==========================================
+                // Step 2: Penumbra Estimation (估算半影大小)
+                // ==========================================
+                // 为了计算物理距离比例，我们将 NDC 深度 [-1, 1] 映射到 [0, 1] 空间
+                double d_receiver = (current_depth + 1.0) / 2.0;
+                double d_blocker = (avg_blocker_depth + 1.0) / 2.0;
+
+                // w_light 是面光源的大小。这个值越大，整体阴影越软。你可以自己调节！
+                double w_light = 12.0;
+
+                // 相似三角形公式：w_penumbra = (d_receiver - d_blocker) / d_blocker * w_light
+                double penumbra_ratio = std::max(0.0, (d_receiver - d_blocker)) / d_blocker;
+                double filter_radius_float = penumbra_ratio * w_light;
+
+                // 限制一下最大 PCF 半径。在 CPU 上跑，半径太大会卡死。最大 6 意味着 13x13 采样。
+                int filter_radius = std::min(6, (int)std::ceil(filter_radius_float));
+
+                // ==========================================
+                // Step 3: PCF 
+                // ==========================================
+                double visibility = 0.0;
+                int sample_count = 0;
+                // 根据刚才算出的动态半径 filter_radius 进行 PCF 采样
+                for (int i = -filter_radius; i <= filter_radius; i++)
+                {
+                    for (int j = -filter_radius; j <= filter_radius; j++)
+                    {
+                        int nx = px + i;
+                        int ny = py + j;
+                        if (nx < 0 || nx >= shadow_w || ny < 0 || ny >= shadow_h)
+                            continue;
+
+                        double sample_depth = shadow_map[nx + ny * shadow_w];
+
+                        // 如果没被挡住，可见度加 1
+                        if (current_depth <= sample_depth + sm_bias)
+                        {
+                            visibility += 1.0;
+                        }
+                        sample_count++;
+                    }
+                }
+
+                if (sample_count > 0)
+                {
+                    visibility /= sample_count; // 算出 [0.0, 1.0] 的可见比例
+                }
+
+                // 最终混合阴影系数：
+                // 如果 visibility 是 0（全被挡住），亮度就是 0.3（最暗的本影）
+                // 如果 visibility 是 1（全没挡住），亮度就是 1.0（全亮）
+                shadow_coeff = 0.3 + 0.7 * visibility;
             }
         }
 
@@ -187,7 +268,7 @@ int main(int argc, char **argv)
         vec3 light_pos = light_dir * 3.0;
 
         set_view_matrix(light_pos, center, up); // 相机移到光源位置
-        set_projection_matrix(60.0, 1.0, 0.1, 15.0);
+        set_projection_matrix(60.0, 1.0, 0.1, 25.0);
         set_viewport_matrix(0, 0, shadow_res, shadow_res); // 使用阴影分辨率
         init_zbuffer(shadow_res, shadow_res);
         TGAImage trash(shadow_res, shadow_res, TGAImage::RGB); // 我们不需要颜色，随便建一个
@@ -224,7 +305,7 @@ int main(int argc, char **argv)
     {
         set_model_matrix(PI / 6.0);
         set_view_matrix(eye, center, up); // 恢复正常的相机位置
-        set_projection_matrix(60.0, (double)width / height, 0.1, 15.0);
+        set_projection_matrix(60.0, (double)width / height, 0.1, 25.0);
         set_viewport_matrix(width / 8, height / 8, width * 3 / 4, height * 3 / 4);
         init_zbuffer(width, height); // 清空 zbuffer 给真正的画面用
 

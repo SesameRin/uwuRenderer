@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <cmath>
 #include <utility>
 #include "geometry.h"
 #include "tgaimage.h"
@@ -27,7 +28,9 @@ struct IShader
     // 通用 2D 贴图采样器
     static TGAColor sample2D(const TGAImage &img, const vec2 &uvf)
     {
-        return img.get(uvf.x * img.width(), uvf.y * img.height());
+        double u = uvf.x - std::floor(uvf.x);
+        double v = uvf.y - std::floor(uvf.y);
+        return img.get(u * img.width(), v * img.height());
     }
 
     virtual vec4 vertex(int iface, int nthvert) = 0;
