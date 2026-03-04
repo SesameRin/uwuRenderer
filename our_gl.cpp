@@ -14,16 +14,23 @@ int screen_width = 0;
 int screen_height = 0;
 
 // Model 矩阵 (局部坐标 -> 世界坐标)
-void set_model_matrix(double angle_y)
+// our_gl.cpp
+void set_model_matrix(double angle_y, vec3 translate)
 {
-    // 一个绕y轴的旋转
-    for (int i = 0; i < 4; i++)
-        for (int j = 0; j < 4; j++)
-            ModelMatrix[i][j] = (i == j ? 1. : 0.);
-    ModelMatrix[0][0] = std::cos(angle_y);
-    ModelMatrix[0][2] = std::sin(angle_y);
-    ModelMatrix[2][0] = -std::sin(angle_y);
-    ModelMatrix[2][2] = std::cos(angle_y);
+    // 1. 构造绕 Y 轴的旋转矩阵 R
+    mat<4, 4> R = {{{std::cos(angle_y), 0, std::sin(angle_y), 0},
+                    {0, 1, 0, 0},
+                    {-std::sin(angle_y), 0, std::cos(angle_y), 0},
+                    {0, 0, 0, 1}}};
+
+    // 2. 构造平移矩阵 T
+    mat<4, 4> T = {{{1, 0, 0, translate.x},
+                    {0, 1, 0, translate.y},
+                    {0, 0, 1, translate.z},
+                    {0, 0, 0, 1}}};
+
+    // 3. 模型矩阵 = T * R (先旋转，再平移)
+    ModelMatrix = T * R;
 }
 
 // View 矩阵 (世界坐标 -> 视图/相机坐标)
@@ -160,9 +167,16 @@ void rasterize(vec4 clip_coords[3], IShader &shader, TGAImage &framebuffer)
 
             if (z < zbuffer[idx])
             {
-                vec3 barycentric_coords = {alpha, beta, gamma};
-                // 3. 调用片元着色器计算颜色
-                auto [discard, color] = shader.fragment(barycentric_coords);
+                // Perspective-Correct Interpolation
+                // 将 2D 屏幕重心坐标除以顶点的 w 分量，转为 3D 真实的权重比例
+                vec3 bc_clip = {
+                    alpha / clip_coords[0].w,
+                    beta / clip_coords[1].w,
+                    gamma / clip_coords[2].w};
+
+                // 归一化
+                bc_clip = bc_clip / (bc_clip.x + bc_clip.y + bc_clip.z);
+                auto [discard, color] = shader.fragment(bc_clip);
 
                 if (!discard)
                 {

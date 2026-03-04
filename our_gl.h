@@ -13,7 +13,7 @@ extern std::vector<double> zbuffer;
 extern int screen_width;
 extern int screen_height;
 
-void set_model_matrix(double angle_y);
+void set_model_matrix(double angle_y, vec3 translate = {0, 0, 0});
 void set_view_matrix(vec3 eye, vec3 center, vec3 up);
 void set_projection_matrix(double fov_deg, double aspect, double near, double far);
 void set_viewport_matrix(int x, int y, int w, int h);
