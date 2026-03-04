@@ -21,6 +21,7 @@ struct PhongShader : public IShader
     mat<4, 4> LightMatrix;           // 从 世界空间 -> 光源屏幕空间 的变换矩阵
     std::vector<double> &shadow_map;
     int shadow_w, shadow_h;          // Shadow Map 的分辨率
+    double sm_bias = 0.001; // shadow map的bias
 
     // --- Shader 内部的数据通道 ---
     vec2 varying_uv[3];
@@ -102,8 +103,8 @@ struct PhongShader : public IShader
             double current_depth = p.z - 1.0;
             // std::cout << "cur depth: " << current_depth << std::endl;
             // std::cout << "shadow map : " << shadow_map[idx] << std::endl;
-            // 加一个极小的 bias 0.05，防止产生 Z-fighting (阴影粉刺)
-            if (current_depth > shadow_map[idx] + 0.002)
+            // 加一个极小的 bias, 防止产生 Z-fighting 自遮挡问题
+            if (current_depth > shadow_map[idx] + sm_bias)
             {
                 shadow_coeff = 0.3; // 处于阴影中，亮度降为 30%
             }
